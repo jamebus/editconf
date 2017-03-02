@@ -42,6 +42,7 @@ have_rcs_controlled_files=''
 edit_files () {
 	test -s "$metadata_file" || return 0
 	echo '==> Editing files.'
+	# TODO: Compat. GNU xargs(1) doesn't have -o
 	awk -F "$record_sep" '{printf "\"%s\"\n", $1}' "$metadata_file" | \
 	  xargs -o sudoedit
 }
@@ -63,6 +64,7 @@ show_diffs () {
 checkin_files () {
 	test -n "$have_rcs_controlled_files" || return 0
 	echo '==> Checking in files.'
+	# TODO: Compat. GNU xargs(1) doesn't have -o
 	awk -F "$record_sep" \
 	  '{ if ($5 == "RCS") printf "\"%s\"\n", $1 }' "$metadata_file" | \
 	    xargs -o sudo ci -u
