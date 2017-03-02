@@ -18,6 +18,8 @@ fi
 
 # Cheap sudo check. There's no deterministic and unobtrusive check of all
 # things someone may need to do here.
+# TODO: Use a wrapper to handle privileged operations instead of using sudo(8)
+# all over the place.
 sudo true
 
 # TODO: compat
