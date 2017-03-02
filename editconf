@@ -20,6 +20,7 @@ fi
 # things someone may need to do here.
 sudo true
 
+# TODO: compat
 metadata_file=$(mktemp -t "$me")
 trap 'rm -f "$metadata_file"' EXIT
 
@@ -193,6 +194,7 @@ for _file in "$@"; do
 
 	# Gather file information
 	eval $(sudo stat -s "$file")
+	# TODO: compat
 	file_mode=$(echo $st_mode | sed -E 's,^[0-9]+([0-9]{4})$,\1,')
 
 	# Checkout if needed
