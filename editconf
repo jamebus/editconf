@@ -204,11 +204,17 @@ for _file in "$@"; do
 	file_basename=$(sudo basename "$file")
 	file_dirname=$(sudo dirname "$file")
 
-	# Gather file information
-	# TODO: compat
-	eval $(sudo stat -s "$file")
-	# TODO: compat
-	file_mode=$(echo $st_mode | sed -E 's,^[0-9]+([0-9]{4})$,\1,')
+	# TODO: do tests only once
+	# BSD
+	if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
+		file_stat_metadata=$(sudo stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$file")
+	# GNU
+	elif stat --format="%u${record_sep}%g${record_sep}%04a" "$0" >/dev/null 2>&1; then
+		file_stat_metadata=$(sudo stat --format="%u${record_sep}%g${record_sep}%04a" "$file")
+	else
+		echo 'Unable to figure out how to call stat(1). Aborting.' 1>&2
+		exit 1
+	fi
 
 	# Checkout if needed
 	checkout_error=0
@@ -229,7 +235,7 @@ for _file in "$@"; do
 
 	fi
 
-	echo -e "${file}${record_sep}${st_uid}${record_sep}${st_gid}${record_sep}${file_mode}${record_sep}${file_rcs_metadata}" >> "$metadata_file"
+	echo -e "${file}${record_sep}${file_stat_metadata}${record_sep}${file_rcs_metadata}" >> "$metadata_file"
 
 done
 
