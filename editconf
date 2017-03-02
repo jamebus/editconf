@@ -1,0 +1,238 @@
+#!/bin/sh
+#
+# Edit a configuration file, maintain permissions and ownership, and
+# checkout/checkin if necessary. It's like sudoedit with smarts.
+#
+
+set -eu
+rc=0
+files=''
+me="${0##*/}"
+record_sep=''
+unset IFS ENV
+
+if [ $# -lt 1 ]; then
+	echo "Usage: $me file ..." 1>&2
+	exit 1
+fi
+
+# Cheap sudo check. There's no deterministic and unobtrusive check of all
+# things someone may need to do here.
+sudo true
+
+metadata_file=$(mktemp -t "$me")
+trap 'rm -f "$metadata_file"' EXIT
+
+have_rcs_controlled_files=''
+
+#
+# Edit files
+#
+edit_files () {
+	test -s "$metadata_file" || return 0
+	echo '==> Editing files.'
+	awk -F "$record_sep" '{printf "\"%s\"\n", $1}' "$metadata_file" | \
+	  xargs -o sudoedit
+}
+
+#
+# Show diffs if file is RCS controlled
+#
+show_diffs () {
+	test -n "$have_rcs_controlled_files" || return 0
+	echo '==> Showing diffs.'
+	awk -F "$record_sep" \
+	  '{ if ($5 == "RCS") printf "\"%s\"\n", $1 }' "$metadata_file" | \
+	    xargs sudo rcsdiff -u || true
+}
+
+#
+# Checkin files if RCS controlled
+#
+checkin_files () {
+	test -n "$have_rcs_controlled_files" || return 0
+	echo '==> Checking in files.'
+	awk -F "$record_sep" \
+	  '{ if ($5 == "RCS") printf "\"%s\"\n", $1 }' "$metadata_file" | \
+	    xargs -o sudo ci -u
+}
+
+#
+# Restore ownership and modes
+#
+restore_ownmodes () {
+	local file file_uid file_gid file_mode file_basename file_dirname \
+	      final_checkin l
+	final_checkin="${1:-}"
+
+	while read l; do
+
+		IFS="$record_sep"
+		set -- $l
+		unset IFS
+		file="$1"
+		file_uid="$2"
+		file_gid="$3"
+		file_mode="$4"
+
+		echo "==> Restoring mode and ownership of \"$file\"."
+
+		sudo chown "$file_uid"  "$file" || rc=$(($rc + 1))
+		sudo chgrp "$file_gid"  "$file" || rc=$(($rc + 1))
+		sudo chmod "$file_mode" "$file" || rc=$(($rc + 1))
+
+		file_basename=$(basename "$file")
+		file_dirname=$(dirname "$file")
+
+		if sudo test -f "${file},v" ; then
+			sudo chown "$file_uid"  "${file},v"  || \
+			  rc=$(($rc + 1))
+			sudo chgrp "$file_gid"  "${file},v"  || \
+			  rc=$(($rc + 1))
+			sudo chmod "$file_mode" "${file},v"  || \
+			  rc=$(($rc + 1))
+			# RCS files shouldn't be writable. Make them unwritable
+			# just in case the file_mode makes them writable if
+			# this is the final checkin. If it's not the final
+			# checkin keep the working file user writable otherwise
+			# rcsdiff will show a diff of the $Id$ token.
+			if [ -n "$final_checkin" ]; then
+				sudo chmod a-w "$file" "${file},v"
+			else
+				sudo chmod u+w "$file"
+			fi
+		fi
+		if sudo test -f "${file_dirname}/RCS/${file_basename},v" ; then
+			sudo chown "$file_uid" \
+			  "${file_dirname}/RCS/${file_basename},v" || \
+			  rc=$(($rc + 1))
+			sudo chgrp "$file_gid" \
+			  "${file_dirname}/RCS/${file_basename},v" || \
+			  rc=$(($rc + 1))
+			sudo chmod "$file_mode" \
+			  "${file_dirname}/RCS/${file_basename},v" || \
+			  rc=$(($rc + 1))
+			# RCS files shouldn't be writable. Make them unwritable
+			# just in case the file_mode makes them writable if
+			# this is the final checkin. If it's not the final
+			# checkin keep the working file user writable otherwise
+			# rcsdiff will show a diff of the $Id$ token.
+			if [ -n "$final_checkin" ]; then
+				sudo chmod a-w "$file" \
+				     "${file_dirname}/RCS/${file_basename},v"
+			else
+				sudo chmod u+w "$file"
+			fi
+		fi
+
+	done < "$metadata_file"
+}
+
+#
+# List files for user verification
+#
+list_files () {
+	test -s "$metadata_file" || return 0
+	local l
+	echo "*   Done. Here's a list of the files worked on for your inspection."
+	while read l; do
+		IFS="$record_sep"
+		set -- $l
+		unset IFS
+		sudo ls -al "$1"
+	done < "$metadata_file"
+}
+
+#
+# Ask a yes/no question.
+# Will return 0 if yes, 1 if no
+#
+ask_yesno () {
+	local question rc answer
+	rc=''
+	question="${1:-OK?}"
+
+	while [ -z "$rc" ]; do
+		echo -n "$question (yes/no): "
+		read answer
+
+		case "$answer" in
+			[Yy][Ee][Ss]) rc=0 ;;
+			[Yy])         rc=0 ;;
+			[Nn][Oo])     rc=1 ;;
+			[Nn])         rc=1 ;;
+		esac
+	done
+
+	return $rc
+}
+
+#
+# Checkout files and collect metadata
+#
+for _file in "$@"; do
+
+	# Exists?
+	if sudo test ! -e "$_file" ; then
+		echo "!   Warning: \"$_file\" does not exist, skipping." 1>&2
+		rc=$(($rc + 1))
+		continue 1
+	fi
+
+	# Is a file?
+	if sudo test ! -f "$_file" ; then
+		echo "!   Warning: \"$_file\" is not a file, skipping." 1>&2
+		rc=$(($rc + 1))
+		continue 1
+	fi
+
+	file_rcs_metadata=''
+	file=$(sudo realpath "$_file")
+	file_basename=$(sudo basename "$file")
+	file_dirname=$(sudo dirname "$file")
+
+	# Gather file information
+	eval $(sudo stat -s "$file")
+	file_mode=$(echo $st_mode | sed -E 's,^[0-9]+([0-9]{4})$,\1,')
+
+	# Checkout if needed
+	checkout_error=0
+	if sudo test -f "${file},v" \
+	             -o -f "${file_dirname}/RCS/${file_basename},v" ; then
+		echo "==> Checking out \"$file\"."
+		sudo co -l "$file" || checkout_error=1
+
+		# Problem checking out?
+		if [ $checkout_error -eq 1 ]; then
+			echo "!   Warning: Error checking out \"$file\", skipping." 1>&2
+			rc=$(($rc + 1))
+			continue 2
+		else
+			file_rcs_metadata='RCS'
+			have_rcs_controlled_files=1
+		fi
+
+	fi
+
+	echo -e "${file}${record_sep}${st_uid}${record_sep}${st_gid}${record_sep}${file_mode}${record_sep}${file_rcs_metadata}" >> "$metadata_file"
+
+done
+
+while true; do
+	edit_files
+	show_diffs
+	restore_ownmodes
+	if [ -n "$have_rcs_controlled_files" ]; then
+		ask_yesno 'OK to checkin?' && break 1
+	else
+		break 1
+	fi
+done
+
+if [ -n "$have_rcs_controlled_files" ]; then
+	checkin_files
+	restore_ownmodes 1
+fi
+
+list_files
+exit $rc
