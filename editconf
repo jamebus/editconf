@@ -203,6 +203,7 @@ for _file in "$@"; do
 	file_dirname=$(sudo dirname "$file")
 
 	# Gather file information
+	# TODO: compat
 	eval $(sudo stat -s "$file")
 	# TODO: compat
 	file_mode=$(echo $st_mode | sed -E 's,^[0-9]+([0-9]{4})$,\1,')
