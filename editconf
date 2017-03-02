@@ -32,7 +32,16 @@ else
 	echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
 	exit 1
 fi
-trap 'rm -f "$metadata_file"' EXIT
+# trap 'rm -f "$metadata_file"' EXIT
+
+if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
+	stat_flavor='BSD'
+elif stat --format="%u${record_sep}%g${record_sep}%04a" "$0" >/dev/null 2>&1; then
+	stat_flavor='GNU'
+else
+	echo 'Unable to figure out how to call stat(1). Aborting.' 1>&2
+	exit 1
+fi
 
 have_rcs_controlled_files=''
 
@@ -204,12 +213,9 @@ for _file in "$@"; do
 	file_basename=$(sudo basename "$file")
 	file_dirname=$(sudo dirname "$file")
 
-	# TODO: do tests only once
-	# BSD
-	if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
+	if [ "$stat_flavor" = 'BSD' ]; then
 		file_stat_metadata=$(sudo stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$file")
-	# GNU
-	elif stat --format="%u${record_sep}%g${record_sep}%04a" "$0" >/dev/null 2>&1; then
+	elif [ "$stat_flavor" = 'GNU' ]; then
 		file_stat_metadata=$(sudo stat --format="%u${record_sep}%g${record_sep}%04a" "$file")
 	else
 		echo 'Unable to figure out how to call stat(1). Aborting.' 1>&2
