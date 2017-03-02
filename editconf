@@ -32,7 +32,7 @@ else
 	echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
 	exit 1
 fi
-# trap 'rm -f "$metadata_file"' EXIT
+trap 'rm -f "$metadata_file"' EXIT
 
 if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
 	stat_flavor='BSD'
