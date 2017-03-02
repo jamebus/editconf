@@ -235,6 +235,7 @@ for _file in "$@"; do
 
 	fi
 
+	# TODO: compat, -e doesn't work always
 	echo -e "${file}${record_sep}${file_stat_metadata}${record_sep}${file_rcs_metadata}" >> "$metadata_file"
 
 done
