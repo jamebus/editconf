@@ -22,8 +22,16 @@ fi
 # all over the place.
 sudo true
 
-# TODO: compat
-metadata_file=$(mktemp -t "$me")
+# BSD
+if mktemp -u -t "$me" >/dev/null 2>&1; then
+	metadata_file=$(mktemp -t "$me")
+# GNU coreutils
+elif mktemp -u -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX" >/dev/null 2>&1; then
+	metadata_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
+else
+	echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
+	exit 1
+fi
 trap 'rm -f "$metadata_file"' EXIT
 
 have_rcs_controlled_files=''
