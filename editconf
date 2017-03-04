@@ -240,6 +240,9 @@ for _file in "$@"; do
 
 	fi
 
+	# Make writeable in case it's set to ro
+	sh "$maybe_sudo_file" chmod u+w "$file"
+
 	echo "${file}${record_sep}${file_stat_metadata}${record_sep}${file_rcs_metadata}" >> "$metadata_file"
 
 done
