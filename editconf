@@ -25,14 +25,18 @@ sudo true
 # BSD
 if mktemp -u -t "$me" >/dev/null 2>&1; then
 	metadata_file=$(mktemp -t "$me")
+	maybe_sudo_file=$(mktemp -t "$me")
+	maybe_sudoedit_file=$(mktemp -t "$me")
 # GNU coreutils
 elif mktemp -u -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX" >/dev/null 2>&1; then
 	metadata_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
+	maybe_sudo_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
+	maybe_sudoedit_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
 else
 	echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
 	exit 1
 fi
-trap 'rm -f "$metadata_file"' EXIT
+trap 'rm -f "$metadata_file" "$maybe_sudo_file" "$maybe_sudoedit_file"' EXIT
 
 if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
 	stat_flavor='BSD'
@@ -46,14 +50,39 @@ fi
 have_rcs_controlled_files=''
 
 #
+# Wrapper for sudo(8) to try to run the command and elevate if needed
+#
+cat <<'_EOF_' > "$maybe_sudo_file"
+set -eu
+"$@" && exit 0
+sudo "$@"
+_EOF_
+
+#
+# Wrapper for sudoedit(8) to try to sudoedit and elevate if needed
+#
+cat <<'_EOF_' > "$maybe_sudoedit_file"
+set -eu
+# Simulate BSD xargs(1) -o behavior in GNU systems
+exec < /dev/tty
+for f in "$@"; do
+	if [ -w "$f" ]; then
+		${VISUAL:-vi} "$f"
+	else
+		TODO: Handle systems without sudoedit(8)?
+		sudoedit "$f"
+	fi
+done
+_EOF_
+
+#
 # Edit files
 #
 edit_files() {
 	test -s "$metadata_file" || return 0
 	echo '==> Editing files.'
-	# TODO: Compat. GNU xargs(1) doesn't have -o
 	awk -F "$record_sep" '{printf "\"%s\"\n", $1}' "$metadata_file" | \
-	  xargs -o sudoedit
+	  xargs sh "$maybe_sudoedit_file"
 }
 
 #
@@ -64,7 +93,7 @@ show_diffs() {
 	echo '==> Showing diffs.'
 	awk -F "$record_sep" \
 	  '{ if ($5 == "RCS") printf "\"%s\"\n", $1 }' "$metadata_file" | \
-	    xargs sudo rcsdiff -u || true
+	    xargs sh "$maybe_sudo_file" rcsdiff -u || true
 }
 
 #
@@ -75,7 +104,7 @@ checkin_files() {
 	echo '==> Checking in files.'
 	awk -F "$record_sep" \
 	  '{ if ($5 == "RCS") printf "\"%s\"\n", $1 }' "$metadata_file" | \
-	    xargs sudo ci -u < /dev/tty
+	    xargs sh "$maybe_sudo_file" ci -u < /dev/tty
 }
 
 #
@@ -98,19 +127,22 @@ restore_ownmodes() {
 
 		echo "==> Restoring mode and ownership of \"$file\"."
 
-		sudo chown "$file_uid"  "$file" || rc=$(($rc + 1))
-		sudo chgrp "$file_gid"  "$file" || rc=$(($rc + 1))
-		sudo chmod "$file_mode" "$file" || rc=$(($rc + 1))
+		sh "$maybe_sudo_file" chown "$file_uid"  "$file" || \
+		  rc=$(($rc + 1))
+		sh "$maybe_sudo_file" chgrp "$file_gid"  "$file" || \
+		  rc=$(($rc + 1))
+		sh "$maybe_sudo_file" chmod "$file_mode" "$file" || \
+		  rc=$(($rc + 1))
 
 		file_basename=$(basename "$file")
 		file_dirname=$(dirname "$file")
 
-		if sudo test -f "${file},v" ; then
-			sudo chown "$file_uid"  "${file},v"  || \
+		if sh "$maybe_sudo_file" test -f "${file},v" ; then
+			sh "$maybe_sudo_file" chown "$file_uid"  "${file},v" || \
 			  rc=$(($rc + 1))
-			sudo chgrp "$file_gid"  "${file},v"  || \
+			sh "$maybe_sudo_file" chgrp "$file_gid"  "${file},v" || \
 			  rc=$(($rc + 1))
-			sudo chmod "$file_mode" "${file},v"  || \
+			sh "$maybe_sudo_file" chmod "$file_mode" "${file},v" || \
 			  rc=$(($rc + 1))
 			# RCS files shouldn't be writable. Make them unwritable
 			# just in case the file_mode makes them writable if
@@ -118,19 +150,19 @@ restore_ownmodes() {
 			# checkin keep the working file user writable otherwise
 			# rcsdiff will show a diff of the $Id$ token.
 			if [ -n "$final_checkin" ]; then
-				sudo chmod a-w "$file" "${file},v"
+				sh "$maybe_sudo_file" chmod a-w "$file" "${file},v"
 			else
-				sudo chmod u+w "$file"
+				sh "$maybe_sudo_file" chmod u+w "$file"
 			fi
 		fi
-		if sudo test -f "${file_dirname}/RCS/${file_basename},v" ; then
-			sudo chown "$file_uid" \
+		if sh "$maybe_sudo_file" test -f "${file_dirname}/RCS/${file_basename},v" ; then
+			sh "$maybe_sudo_file" chown "$file_uid" \
 			  "${file_dirname}/RCS/${file_basename},v" || \
 			  rc=$(($rc + 1))
-			sudo chgrp "$file_gid" \
+			sh "$maybe_sudo_file" chgrp "$file_gid" \
 			  "${file_dirname}/RCS/${file_basename},v" || \
 			  rc=$(($rc + 1))
-			sudo chmod "$file_mode" \
+			sh "$maybe_sudo_file" chmod "$file_mode" \
 			  "${file_dirname}/RCS/${file_basename},v" || \
 			  rc=$(($rc + 1))
 			# RCS files shouldn't be writable. Make them unwritable
@@ -139,10 +171,10 @@ restore_ownmodes() {
 			# checkin keep the working file user writable otherwise
 			# rcsdiff will show a diff of the $Id$ token.
 			if [ -n "$final_checkin" ]; then
-				sudo chmod a-w "$file" \
+				sh "$maybe_sudo_file" chmod a-w "$file" \
 				     "${file_dirname}/RCS/${file_basename},v"
 			else
-				sudo chmod u+w "$file"
+				sh "$maybe_sudo_file" chmod u+w "$file"
 			fi
 		fi
 
@@ -160,7 +192,7 @@ list_files() {
 		IFS="$record_sep"
 		set -- $l
 		unset IFS
-		sudo ls -al "$1"
+		sh "$maybe_sudo_file" ls -al "$1"
 	done < "$metadata_file"
 }
 
@@ -194,28 +226,28 @@ ask_yesno() {
 for _file in "$@"; do
 
 	# Exists?
-	if sudo test ! -e "$_file" ; then
+	if sh "$maybe_sudo_file" test ! -e "$_file" ; then
 		echo "!   Warning: \"$_file\" does not exist, skipping." 1>&2
 		rc=$(($rc + 1))
 		continue 1
 	fi
 
 	# Is a file?
-	if sudo test ! -f "$_file" ; then
+	if sh "$maybe_sudo_file" test ! -f "$_file" ; then
 		echo "!   Warning: \"$_file\" is not a file, skipping." 1>&2
 		rc=$(($rc + 1))
 		continue 1
 	fi
 
 	file_rcs_metadata=''
-	file=$(sudo realpath "$_file")
-	file_basename=$(sudo basename "$file")
-	file_dirname=$(sudo dirname "$file")
+	file=$(sh "$maybe_sudo_file" realpath "$_file")
+	file_basename=$(sh "$maybe_sudo_file" basename "$file")
+	file_dirname=$(sh "$maybe_sudo_file" dirname "$file")
 
 	if [ "$stat_flavor" = 'BSD' ]; then
-		file_stat_metadata=$(sudo stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$file")
+		file_stat_metadata=$(sh "$maybe_sudo_file" stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$file")
 	elif [ "$stat_flavor" = 'GNU' ]; then
-		file_stat_metadata=$(sudo stat --format="%u${record_sep}%g${record_sep}%04a" "$file")
+		file_stat_metadata=$(sh "$maybe_sudo_file" stat --format="%u${record_sep}%g${record_sep}%04a" "$file")
 	else
 		echo 'Unable to figure out how to call stat(1). Aborting.' 1>&2
 		exit 1
@@ -223,10 +255,10 @@ for _file in "$@"; do
 
 	# Checkout if needed
 	checkout_error=0
-	if sudo test -f "${file},v" \
+	if sh "$maybe_sudo_file" test -f "${file},v" \
 	             -o -f "${file_dirname}/RCS/${file_basename},v" ; then
 		echo "==> Checking out \"$file\"."
-		sudo co -l "$file" || checkout_error=1
+		sh "$maybe_sudo_file" co -l "$file" || checkout_error=1
 
 		# Problem checking out?
 		if [ $checkout_error -eq 1 ]; then
