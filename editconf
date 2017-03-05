@@ -27,15 +27,18 @@ if mktemp -u -t "$me" >/dev/null 2>&1; then
 	metadata_file=$(mktemp -t "$me")
 	maybe_sudo_file=$(mktemp -t "$me")
 	maybe_sudoedit_file=$(mktemp -t "$me")
+	MKTEMP_FLAVOR='BSD'
 # GNU coreutils
 elif mktemp -u -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX" >/dev/null 2>&1; then
 	metadata_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
 	maybe_sudo_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
 	maybe_sudoedit_file=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
+	MKTEMP_FLAVOR='GNU'
 else
 	echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
 	exit 1
 fi
+export MKTEMP_FLAVOR
 trap 'rm -f "$metadata_file" "$maybe_sudo_file" "$maybe_sudoedit_file"' EXIT
 
 if stat -f "%u${record_sep}%g${record_sep}%Mp%Lp" "$0" >/dev/null 2>&1; then
@@ -63,14 +66,32 @@ _EOF_
 #
 cat <<'_EOF_' > "$maybe_sudoedit_file"
 set -eu
+me='maybe_sudoedit'
 # Simulate BSD xargs(1) -o behavior in GNU systems
 exec < /dev/tty
 for f in "$@"; do
 	if [ -w "$f" ]; then
 		${VISUAL:-vi} "$f"
 	else
-		TODO: Handle systems without sudoedit(8)?
-		sudoedit "$f"
+		if which sudoedit; then
+			sudoedit "$f"
+		else
+			if [ "$MKTEMP_FLAVOR" = 'BSD' ]; then
+				tmpfile=$(mktemp -t "$me")
+			elif [ "$MKTEMP_FLAVOR" = 'GNU' ]; then
+				tmpfile=$(mktemp -p "${TMPDIR:-/tmp}" "${me}.XXXXXXXXXX")
+			else
+				echo 'Unable to figure out how to make temporary files. Aborting.' 1>&2
+				exit 1
+			fi
+			# Just in case ^c or something fails
+			trap 'rm -f "$tmpfile"' EXIT
+
+			sudo cp "$f" "$tmpfile"
+			${VISUAL:-vi} "$tmpfile"
+			sudo install -m 0600 "$tmpfile" "$f"
+			rm -f "$tmpfile"
+		fi
 	fi
 done
 _EOF_
