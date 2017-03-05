@@ -57,7 +57,7 @@ have_rcs_controlled_files=''
 #
 cat <<'_EOF_' > "$maybe_sudo_file"
 set -eu
-"$@" && exit 0
+"$@" 2>/dev/null && exit 0
 sudo "$@"
 _EOF_
 
