@@ -73,7 +73,7 @@ for f in "$@"; do
 	if [ -w "$f" ]; then
 		${VISUAL:-vi} "$f"
 	else
-		if which sudoedit; then
+		if which sudoedit >/dev/null; then
 			sudoedit "$f"
 		else
 			if [ "$MKTEMP_FLAVOR" = 'BSD' ]; then
